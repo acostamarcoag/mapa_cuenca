@@ -148,7 +148,15 @@
     }
     .barrio-tooltip::before { display: none; }
 
-    /* Buscador de sector censal */
+    /* Selector de capa temática */
+    .modoRow { display:flex; flex-direction:column; gap:6px; }
+    .popTable { width:100%; border-collapse:collapse; margin-top:6px; font-size:12px; }
+    .popTable td { padding:3px 0; }
+    .popTable td:last-child { text-align:right; font-weight:700; }
+    .barraSexo { display:flex; height:8px; border-radius:4px; overflow:hidden; margin:4px 0 2px; }
+    .barraSexo .h { background:#3b82f6; } .barraSexo .m { background:#ec4899; }
+
+        /* Buscador de sector censal */
     .sugs { margin-top: 6px; border: 1px solid rgba(0,0,0,.12); border-radius: 10px; overflow: hidden; display: none; background: #fff; }
     .sugs .it { display: flex; align-items: center; gap: 8px; padding: 8px 10px; font-size: 13px; cursor: pointer; border-bottom: 1px dashed rgba(0,0,0,.08); }
     .sugs .it:last-child { border-bottom: none; }
@@ -222,6 +230,38 @@
           Activa la capa de barrios para ver los límites en el mapa.<br>
           Al pasar el cursor sobre el mapa verás el nombre del barrio.
         </div>
+      </div>
+
+      <!-- CAPA TEMÁTICA -->
+      <div class="card">
+        <label for="selCapaTematica">Colorear mapa por</label>
+        <select id="selCapaTematica">
+          <option value="estrato">Estrato socioeconómico</option>
+          <option value="parroquia_urbana">Parroquia urbana</option>
+          <option value="pct_mujeres">% Mujeres</option>
+          <option value="pct_votar">% Población en edad de votar (16+)</option>
+          <option value="resultado_2v">Resultado electoral (2ª vuelta)</option>
+          <option value="indice_oportunidad">Índice de oportunidad electoral</option>
+        </select>
+        <div class="muted" id="leyendaTematica" style="margin-top:8px"></div>
+      </div>
+
+      <!-- FILTROS ELECTORALES -->
+      <div class="card">
+        <div class="h1" style="font-size:13px;margin-bottom:6px">Filtros de priorización</div>
+        <div class="muted" style="margin-bottom:8px">Se combinan entre sí (aplican sobre parroquias).</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#111827;margin-bottom:6px">
+          <input type="checkbox" id="chkBajos" style="width:auto"> Solo sectores C- o D
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#111827;margin-bottom:6px">
+          <input type="checkbox" id="chkRenida" style="width:auto"> Solo parroquias reñidas (margen &lt; 20 pp)
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#111827;margin-bottom:6px">
+          <input type="checkbox" id="chkJoven" style="width:auto"> Alta población joven (16-29)
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#111827">
+          <input type="checkbox" id="chkAusentismo" style="width:auto"> Alto ausentismo (oportunidad de movilizar)
+        </label>
       </div>
 
       <!-- FILTRO ESTRATO -->
@@ -363,6 +403,7 @@
 
   <!-- Data capas -->
   <script src="data/sec_a_simplificado_cuenca.js"></script>
+  <script src="data/parroquias_resultados_cuenca.js"></script>
 
   <!--
     ====================================================================
@@ -427,6 +468,14 @@
       "010171": "Victoria del Portete"
     };
 
+    function parroquiaMostrar(p) {
+      if (p.sec_parroq_urbana) {
+        var nombre = String(p.sec_parroq_urbana);
+        return nombre.charAt(0) + nombre.slice(1).toLowerCase();
+      }
+      return parroquiaNombre(p.parroquia);
+    }
+
     function parroquiaNombre(codigo) {
       if (codigo == null) return "";
       var c = String(codigo).trim().padStart(6, '0');
@@ -469,6 +518,55 @@
     };
     function estratoColors(e) {
       return ESTRATO_COLORS[e] || ESTRATO_COLORS['__'];
+    }
+
+    /* Colores por parroquia urbana (paleta fija de 15 tonos + gris para rural) */
+    var PARROQUIA_URBANA_COLORS = {
+      'YANUNCAY':        '#2563eb', 'SAN SEBASTIAN':   '#16a34a', 'MACHANGARA':      '#eab308',
+      'BELLAVISTA':      '#db2777', 'EL VECINO':       '#7c3aed', 'EL BATAN':        '#0891b2',
+      'TOTORACOCHA':     '#ea580c', 'MONAY':           '#65a30d', 'HERMANO MIGUEL':  '#be123c',
+      'SUCRE':           '#0d9488', 'HUAYNA CAPAC':    '#9333ea', 'CAÑARIBAMBA':     '#ca8a04',
+      'SAN BLAS':        '#4338ca', 'EL SAGRARIO':     '#c2410c', 'GIL RAMIREZ D.':  '#15803d'
+    };
+    function colorParroquiaUrbana(nombre) {
+      return PARROQUIA_URBANA_COLORS[nombre] || 'rgba(156,163,175,0.5)';
+    }
+
+    /* Escala continua blanco -> color, para variables 0-100% */
+    function colorEscala(pct, colorFuerte) {
+      var t = Math.max(0, Math.min(1, (pct || 0) / 100));
+      return 'rgba(' + colorFuerte + ',' + (0.08 + 0.55 * t) + ')';
+    }
+
+    var CAPA_TEMATICA = 'estrato';
+
+    function estiloTematico(feature) {
+      var p = feature.properties || {};
+      var base = {
+        pane: 'pane_sec_a_simplificado_1', opacity: 1,
+        color: 'rgba(35,35,35,0.3)', weight: 0.5, fill: true, interactive: true
+      };
+      if (CAPA_TEMATICA === 'parroquia_urbana') {
+        var pu = p.sec_parroq_urbana;
+        return Object.assign({}, base, {
+          fillColor: pu ? colorParroquiaUrbana(pu) : 'rgba(209,213,219,0.5)',
+          fillOpacity: pu ? 0.55 : 0.15
+        });
+      }
+      if (CAPA_TEMATICA === 'pct_mujeres') {
+        var tot = toNumber(p.sec_poblacion_total);
+        var pct = tot > 0 ? (toNumber(p.sec_mujeres_total) / tot * 100) : null;
+        return Object.assign({}, base, { fillColor: pct == null ? 'rgba(209,213,219,0.3)' : colorEscala(pct, '236,72,153'), fillOpacity: 0.7 });
+      }
+      if (CAPA_TEMATICA === 'pct_votar') {
+        var tot2 = toNumber(p.sec_poblacion_total);
+        var pct2 = tot2 > 0 ? (toNumber(p.sec_poblacion_edad_votar) / tot2 * 100) : null;
+        return Object.assign({}, base, { fillColor: pct2 == null ? 'rgba(209,213,219,0.3)' : colorEscala(pct2, '37,99,235'), fillOpacity: 0.7 });
+      }
+      // default: estrato
+      var e = String(p.sec_estrato_sector || '');
+      var c = estratoColors(e);
+      return Object.assign({}, base, { fillColor: c.fill, fillOpacity: 0.45 });
     }
 
     /* ============================
@@ -539,18 +637,7 @@
        CAPA 1: SECTORES CENSALES
     ============================ */
     function style_sec_a_simplificado_1_0(feature) {
-      var e = String(feature.properties['sec_estrato_sector'] || '');
-      var c = estratoColors(e);
-      return {
-        pane: 'pane_sec_a_simplificado_1',
-        opacity: 1,
-        color: 'rgba(35,35,35,0.3)',
-        weight: 0.5,
-        fill: true,
-        fillOpacity: 1,
-        fillColor: c.fill,
-        interactive: true
-      };
+      return estiloTematico(feature);
     }
 
     map.createPane('pane_sec_a_simplificado_1');
@@ -559,8 +646,9 @@
 
     function pop_sec_a_simplificado_1(feature, layer) {
       var p = feature.properties || {};
-      var codPar = (p.parroquia != null ? String(p.parroquia).trim() : "");
-      var nomPar = parroquiaNombre(codPar);
+      var nomPar = parroquiaMostrar(p);
+
+      layer.bindTooltip(nomPar, { sticky: true, className: 'barrio-tooltip' });
 
       layer.on('click', function (ev) {
         suppressNextMapClick = true;
@@ -570,17 +658,47 @@
         setPoint(latlng);
         var sv = streetViewUrl(latlng.lat, latlng.lng);
 
+        var tot = toNumber(p.sec_poblacion_total);
+        var hom = toNumber(p.sec_hombres_total), muj = toNumber(p.sec_mujeres_total);
+        var pctHom = tot > 0 ? (hom / tot * 100) : 0, pctMuj = tot > 0 ? (muj / tot * 100) : 0;
+        var pctVotar = tot > 0 ? (toNumber(p.sec_poblacion_edad_votar) / tot * 100) : 0;
+
+        var tablaPob = '';
+        if (tot > 0) {
+          tablaPob = ''
+            + '<div style="margin-top:10px;font-weight:800;font-size:12px;color:rgba(0,0,0,.62)">Población — ' + fmtInt(tot) + ' personas</div>'
+            + '<div class="barraSexo"><div class="h" style="width:' + pctHom + '%"></div><div class="m" style="width:' + pctMuj + '%"></div></div>'
+            + '<div style="font-size:11px;color:rgba(0,0,0,.55)">'
+            +   '<span style="color:#3b82f6">● Hombres ' + fmtPct(pctHom) + '</span> &nbsp; '
+            +   '<span style="color:#ec4899">● Mujeres ' + fmtPct(pctMuj) + '</span>'
+            + '</div>'
+            + '<table class="popTable">'
+            + '  <tr><td>16-29 años</td><td>' + fmtInt(toNumber(p.sec_hom_16_29) + toNumber(p.sec_muj_16_29)) + '</td></tr>'
+            + '  <tr><td>30-44 años</td><td>' + fmtInt(toNumber(p.sec_hom_30_44) + toNumber(p.sec_muj_30_44)) + '</td></tr>'
+            + '  <tr><td>45-64 años</td><td>' + fmtInt(toNumber(p.sec_hom_45_64) + toNumber(p.sec_muj_45_64)) + '</td></tr>'
+            + '  <tr><td>65 años o más</td><td>' + fmtInt(toNumber(p.sec_hom_65_mas) + toNumber(p.sec_muj_65_mas)) + '</td></tr>'
+            + '  <tr><td><b>En edad de votar (16+)</b></td><td>' + fmtInt(toNumber(p.sec_poblacion_edad_votar)) + ' (' + fmtPct(pctVotar) + ')</td></tr>'
+            + '</table>';
+        }
+
+        var rElec = RESULTADOS_PARROQUIA[nomPar];
+        var contextoElectoral = '';
+        if (rElec) {
+          contextoElectoral = ''
+            + '<div style="margin-top:10px;padding:8px 10px;background:#f9fafb;border-radius:8px;font-size:12px;line-height:1.5">'
+            +   '<b>Contexto electoral — ' + rElec.parroquia + '</b><br>'
+            +   'Ganador 2V: ' + rElec.ganador_2v + ' (' + fmtPct(Math.max(rElec.noboa_2v_pct, rElec.gonzalez_2v_pct)) + ') · Margen: ' + fmtInt(rElec.margen_votos) + ' votos<br>'
+            +   'Participación: ' + fmtPct(rElec.participacion_pct) + (rElec.renida ? ' · <span style="color:#b91c1c;font-weight:700">parroquia reñida</span>' : '')
+            + '</div>';
+        }
+
         var html = ''
+          + '<div style="font-weight:900;font-size:15px;margin-bottom:8px">' + nomPar + '</div>'
           + '<table style="width:100%;border-collapse:collapse">'
           + '  <tr><th style="text-align:left;padding:6px 0;color:rgba(0,0,0,.62);font-size:12px;border-bottom:1px solid rgba(0,0,0,.08)">Campo</th>'
           + '      <th style="text-align:left;padding:6px 0;color:rgba(0,0,0,.62);font-size:12px;border-bottom:1px solid rgba(0,0,0,.08)">Valor</th></tr>'
           + '  <tr><td style="padding:6px 0;border-bottom:1px dashed rgba(0,0,0,.08)"><b>sec</b></td>'
           + '      <td style="padding:6px 0;border-bottom:1px dashed rgba(0,0,0,.08)">' + (p.sec != null ? autolinker.link(String(p.sec)) : '') + '</td></tr>'
-          + '  <tr><td style="padding:6px 0;border-bottom:1px dashed rgba(0,0,0,.08)"><b>parroquia</b></td>'
-          + '      <td style="padding:6px 0;border-bottom:1px dashed rgba(0,0,0,.08)">'
-          +          (codPar ? autolinker.link(codPar) : '')
-          +          (nomPar && nomPar !== codPar ? ('<br><b>' + nomPar + '</b>') : '')
-          + '      </td></tr>'
           + '  <tr><td style="padding:6px 0;border-bottom:1px dashed rgba(0,0,0,.08)"><b>estrato</b></td>'
           + '      <td style="padding:6px 0;border-bottom:1px dashed rgba(0,0,0,.08)">' + (p.sec_estrato_sector != null ? autolinker.link(String(p.sec_estrato_sector)) : '') + '</td></tr>'
           + '  <tr><td style="padding:6px 0;border-bottom:1px dashed rgba(0,0,0,.08)"><b>hogares</b></td>'
@@ -588,6 +706,7 @@
           + '  <tr><td style="padding:6px 0"><b>puntaje prom</b></td>'
           + '      <td style="padding:6px 0">' + (p.sec_puntaje_prom != null ? autolinker.link(String(p.sec_puntaje_prom)) : '') + '</td></tr>'
           + '</table>'
+          + tablaPob
           + '<div style="margin-top:10px;color:rgba(0,0,0,.62);font-size:12px;line-height:1.35">'
           +   'Street View muestra la vista a nivel de calle del entorno del punto.'
           + '</div>'
@@ -599,6 +718,7 @@
           + '<div style="margin-top:10px;color:rgba(0,0,0,.62);font-size:12px">'
           +   'Coordenadas: <b>' + fmtCoord(latlng.lat) + ', ' + fmtCoord(latlng.lng) + '</b>'
           + '</div>'
+          + contextoElectoral
 ;
         /* Guardar referencia global al punto actual para el botón del sidebar */
         window._puntoPopup = { lat: latlng.lat, lng: latlng.lng, estrato: String(p.sec_estrato_sector || '') };
@@ -612,7 +732,129 @@
       });
     }
 
-    var layer_sec_a_simplificado_1 = new L.geoJson(json_sec_a_simplificado_cuenca, {
+    /* ============================
+       CAPA: RESULTADOS ELECTORALES POR PARROQUIA
+    ============================ */
+    var RESULTADOS_PARROQUIA = {};
+    (json_parroquias_resultados_cuenca.features || []).forEach(function (f) {
+      RESULTADOS_PARROQUIA[f.properties.parroquia] = f.properties;
+    });
+
+    var margenes = Object.values(RESULTADOS_PARROQUIA).map(function(r){ return r.margen_pct; });
+    var MARGEN_MIN = Math.min.apply(null, margenes), MARGEN_MAX = Math.max.apply(null, margenes);
+
+    function colorGanador2V(r) {
+      if (!r) return 'rgba(209,213,219,0.4)';
+      var t = 1 - (r.margen_pct - MARGEN_MIN) / (MARGEN_MAX - MARGEN_MIN); // 1 = muy reñida
+      var op = 0.25 + 0.5 * t;
+      return r.ganador_2v.indexOf('Noboa') > -1 ? 'rgba(37,99,235,' + op + ')' : 'rgba(220,38,38,' + op + ')';
+    }
+    function colorIndiceOportunidad(r) {
+      if (!r) return 'rgba(209,213,219,0.3)';
+      var t = Math.max(0, Math.min(1, r.indice_oportunidad / 100));
+      return 'rgba(220,38,38,' + (0.08 + 0.62 * t) + ')';
+    }
+
+    function popupParroquiaHtml(r) {
+      if (!r) return '<div style="font-weight:800">Sin datos electorales para esta parroquia.</div>';
+      var candidatos1v = r.top1v.map(function(c){
+        return '<tr><td>' + c.candidato + '</td><td style="text-align:right">' + fmtPct(c.pct) + '</td></tr>';
+      }).join('');
+      return ''
+        + '<div style="font-weight:900;font-size:16px;margin-bottom:2px">' + r.parroquia + '</div>'
+        + '<div class="muted" style="margin-bottom:8px">Parroquia ' + r.tipo + ' · ' + fmtInt(r.electores) + ' electores</div>'
+        + '<div style="font-size:12px;color:rgba(0,0,0,.62);margin-bottom:2px">Participación ' + fmtPct(r.participacion_pct) + ' · Ausentismo ' + fmtPct(r.ausentismo_pct) + '</div>'
+        + '<div style="font-weight:800;font-size:12px;margin-top:8px;color:#374151">1ª vuelta — ganador: ' + r.ganador_1v + '</div>'
+        + '<table class="popTable">' + candidatos1v + '</table>'
+        + '<div style="font-weight:800;font-size:12px;margin-top:8px;color:#374151">2ª vuelta — ganador: ' + r.ganador_2v + '</div>'
+        + '<table class="popTable">'
+        +   '<tr><td>Daniel Noboa</td><td style="text-align:right">' + fmtPct(r.noboa_2v_pct) + '</td></tr>'
+        +   '<tr><td>Luisa González</td><td style="text-align:right">' + fmtPct(r.gonzalez_2v_pct) + '</td></tr>'
+        +   '<tr><td><b>Margen de victoria</b></td><td style="text-align:right"><b>' + fmtInt(r.margen_votos) + ' votos (' + fmtPct(r.margen_pct) + ')</b></td></tr>'
+        +   '<tr><td>Variación Noboa 1V→2V</td><td style="text-align:right">' + (r.variacion_pp_noboa>=0?'+':'') + fmtPct(r.variacion_pp_noboa) + '</td></tr>'
+        + '</table>'
+        + '<div style="font-weight:800;font-size:12px;margin-top:10px;color:#374151">Perfil socioeconómico de la parroquia</div>'
+        + '<table class="popTable">'
+        +   '<tr><td>Hogares</td><td style="text-align:right">' + fmtInt(r.hogares) + '</td></tr>'
+        +   '<tr><td>Sectores en C- o D</td><td style="text-align:right">' + r.sectores_bajos + ' de ' + r.sectores + ' (' + fmtPct(r.pct_hogares_bajos) + ' de hogares)</td></tr>'
+        +   '<tr><td>Población 16-29 años</td><td style="text-align:right">' + fmtPct(r.pct_pob_16_29) + '</td></tr>'
+        +   '<tr><td><b>Índice de oportunidad</b></td><td style="text-align:right"><b>' + r.indice_oportunidad + ' / 100</b></td></tr>'
+        + '</table>'
+        + '<div style="margin-top:8px;font-size:10.5px;color:rgba(0,0,0,.5);line-height:1.4">Índice orientativo, calculado a partir de necesidad social, competitividad electoral, población joven y ausentismo, normalizados entre las 36 parroquias del cantón. No es una medición absoluta ni sustituye el criterio propio.</div>';
+    }
+
+    map.createPane('pane_parroquias_resultados');
+    map.getPane('pane_parroquias_resultados').style.zIndex = 403;
+
+    var layer_parroquias_resultados = L.geoJson(json_parroquias_resultados_cuenca, {
+      pane: 'pane_parroquias_resultados',
+      style: function (feature) {
+        var r = feature.properties;
+        var fill = CAPA_TEMATICA === 'indice_oportunidad' ? colorIndiceOportunidad(r) : colorGanador2V(r);
+        return { color: 'rgba(17,24,39,0.55)', weight: 1, fillColor: fill, fillOpacity: 1, interactive: true };
+      },
+      onEachFeature: function (feature, layer) {
+        layer.bindTooltip(feature.properties.parroquia, { sticky: true, className: 'barrio-tooltip' });
+        layer.on('click', function (ev) {
+          suppressNextMapClick = true;
+          setTimeout(function () { suppressNextMapClick = false; }, 0);
+          layer.bindPopup(popupParroquiaHtml(feature.properties), { maxWidth: 340, maxHeight: 480 }).openPopup(ev.latlng);
+        });
+      }
+    });
+
+    function actualizarCapaElectoral() {
+      var mostrar = (CAPA_TEMATICA === 'resultado_2v' || CAPA_TEMATICA === 'indice_oportunidad');
+      if (mostrar) {
+        layer_parroquias_resultados.setStyle(function (feature) {
+          var r = feature.properties;
+          var fill = CAPA_TEMATICA === 'indice_oportunidad' ? colorIndiceOportunidad(r) : colorGanador2V(r);
+          return { color: 'rgba(17,24,39,0.55)', weight: 1, fillColor: fill, fillOpacity: 1, interactive: true };
+        });
+        if (!map.hasLayer(layer_parroquias_resultados)) layer_parroquias_resultados.addTo(map);
+      } else if (map.hasLayer(layer_parroquias_resultados)) {
+        map.removeLayer(layer_parroquias_resultados);
+      }
+    }
+
+    /* ============================
+       FILTROS DE PRIORIZACIÓN (compuestos)
+    ============================ */
+    function filtrosActivos() {
+      return {
+        bajos: document.getElementById('chkBajos').checked,
+        renida: document.getElementById('chkRenida').checked,
+        joven: document.getElementById('chkJoven').checked,
+        ausentismo: document.getElementById('chkAusentismo').checked
+      };
+    }
+    var UMBRAL_JOVEN = 22, UMBRAL_AUSENTISMO = 22; // percentiles altos observados en las 36 parroquias
+
+    function sectorPasaFiltros(p, f) {
+      if (f.bajos && !(p.sec_estrato_sector === 'C-' || p.sec_estrato_sector === 'D')) return false;
+      var r = RESULTADOS_PARROQUIA[parroquiaMostrar(p)];
+      if (f.renida && (!r || !r.renida)) return false;
+      if (f.joven && (!r || r.pct_pob_16_29 < UMBRAL_JOVEN)) return false;
+      if (f.ausentismo && (!r || r.ausentismo_pct < UMBRAL_AUSENTISMO)) return false;
+      return true;
+    }
+
+    function aplicarFiltrosPriorizacion() {
+      var f = filtrosActivos();
+      var algunoActivo = f.bajos || f.renida || f.joven || f.ausentismo;
+      layer_sec_a_simplificado_1.setStyle(function (feature) {
+        var base = estiloTematico(feature);
+        if (!algunoActivo) return base;
+        var pasa = sectorPasaFiltros(feature.properties || {}, f);
+        return pasa ? Object.assign({}, base, { fillOpacity: Math.max(base.fillOpacity, 0.7), opacity: 1 })
+                    : Object.assign({}, base, { fillOpacity: 0.04, opacity: 0.15 });
+      });
+    }
+    ['chkBajos','chkRenida','chkJoven','chkAusentismo'].forEach(function (id) {
+      document.getElementById(id).addEventListener('change', aplicarFiltrosPriorizacion);
+    });
+
+        var layer_sec_a_simplificado_1 = new L.geoJson(json_sec_a_simplificado_cuenca, {
       attribution: '',
       interactive: true,
       dataVar: 'json_sec_a_simplificado_cuenca',
@@ -778,7 +1020,38 @@
       }
     });
 
-    actualizarToggleUI(); /* estado inicial */
+    /* ============================
+       SELECTOR DE CAPA TEMÁTICA
+    ============================ */
+    var LEYENDAS_TEMATICA = {
+      estrato: 'Colores por estrato socioeconómico (ver tabla de abajo).',
+      parroquia_urbana: 'Cada color es una parroquia urbana de Cuenca. Gris = sector rural (sin parroquia urbana).',
+      pct_mujeres: 'Más intenso = mayor proporción de mujeres en el sector.',
+      pct_votar: 'Más intenso = mayor proporción de población en edad de votar (16 años o más).'
+    };
+
+    var LEYENDAS_TEMATICA_EXTRA = {
+      resultado_2v: 'Azul = ganó Noboa, rojo = ganó González. Más intenso = elección más reñida en esa parroquia.',
+      indice_oportunidad: 'Más intenso = mayor índice de oportunidad (necesidad social + competitividad + población joven + ausentismo).'
+    };
+    Object.assign(LEYENDAS_TEMATICA, LEYENDAS_TEMATICA_EXTRA);
+
+    document.getElementById('selCapaTematica').addEventListener('change', function () {
+      CAPA_TEMATICA = this.value;
+      document.getElementById('leyendaTematica').textContent = LEYENDAS_TEMATICA[CAPA_TEMATICA] || '';
+      actualizarCapaElectoral();
+      /* reaplica el filtro de estrato / parroquia activo, sobre la nueva capa temática */
+      var catFilter = document.getElementById('filtroEstrato').value;
+      if (typeof parroquiaActivaCod !== 'undefined' && parroquiaActivaCod) {
+        aplicarFiltroParroquia(parroquiaActivaCod, catFilter);
+      } else {
+        applyFilterToLayer(catFilter);
+      }
+      aplicarFiltrosPriorizacion();
+    });
+    document.getElementById('leyendaTematica').textContent = LEYENDAS_TEMATICA.estrato;
+
+        actualizarToggleUI(); /* estado inicial */
 
     /* ============================
        LAYERS TREE
