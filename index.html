@@ -150,11 +150,15 @@
 
     /* Selector de capa temática */
     .modoRow { display:flex; flex-direction:column; gap:6px; }
-    .popTable { width:100%; border-collapse:collapse; margin-top:4px; font-size:11px; line-height:1.35; }
-    .popTable td { padding:2px 0; }
-    .leaflet-popup-content { font-size:12px; line-height:1.4; }
+    .popTable { width:100%; border-collapse:collapse; margin-top:4px; font-size:11px; line-height:1.35; table-layout:fixed; }
+    .popTable td { padding:2px 4px 2px 0; overflow-wrap:break-word; }
+    .popTable td:last-child { padding-right:2px; }
+    .leaflet-popup-content { font-size:12px; line-height:1.4; overflow-wrap:break-word; }
     .leaflet-popup-content table { font-size:11px; }
-    .leaflet-popup-content-wrapper { max-width: 92vw; }
+    .leaflet-popup-content-wrapper { max-width: 94vw; }
+    .leaflet-popup-content { overflow-y: scroll !important; }
+    .leaflet-popup-content { margin: 12px 16px 12px 14px !important; }
+    .popup-scroll-hint { text-align:center; font-size:10px; color:#9ca3af; margin-top:6px; }
     .popTable td:last-child { text-align:right; font-weight:700; }
     .barraSexo { display:flex; height:8px; border-radius:4px; overflow:hidden; margin:4px 0 2px; }
     .barraSexo .h { background:#3b82f6; } .barraSexo .m { background:#ec4899; }
@@ -240,7 +244,7 @@
         <label for="selCapaTematica">Colorear mapa por</label>
         <select id="selCapaTematica">
           <option value="estrato">Estrato socioeconómico</option>
-          <option value="parroquia_urbana">Parroquia urbana</option>
+          <option value="parroquia_urbana">Parroquia (urbana y rural)</option>
           <option value="pct_mujeres">% Mujeres</option>
           <option value="pct_votar">% Población en edad de votar (16+)</option>
           <option value="pct_16_29">% Jóvenes (16-29)</option>
@@ -534,15 +538,23 @@
     }
 
     /* Colores por parroquia urbana (paleta fija de 15 tonos + gris para rural) */
-    var PARROQUIA_URBANA_COLORS = {
-      'YANUNCAY':        '#2563eb', 'SAN SEBASTIAN':   '#16a34a', 'MACHANGARA':      '#eab308',
-      'BELLAVISTA':      '#db2777', 'EL VECINO':       '#7c3aed', 'EL BATAN':        '#0891b2',
-      'TOTORACOCHA':     '#ea580c', 'MONAY':           '#65a30d', 'HERMANO MIGUEL':  '#be123c',
-      'SUCRE':           '#0d9488', 'HUAYNA CAPAC':    '#9333ea', 'CAÑARIBAMBA':     '#ca8a04',
-      'SAN BLAS':        '#4338ca', 'EL SAGRARIO':     '#c2410c', 'GIL RAMIREZ D.':  '#15803d'
+    /* Color individual para las 36 parroquias (15 urbanas + 21 rurales), por nombre visible
+       (el mismo que usa parroquiaMostrar), para que urbano y rural se distingan igual de bien. */
+    var PARROQUIA_TODAS_COLORS = {
+      'Yanuncay':'#2563eb', 'San Sebastian':'#16a34a', 'San Sebastián':'#16a34a', 'Machangara':'#eab308',
+      'Bellavista':'#db2777', 'El Vecino':'#7c3aed', 'El Batan':'#0891b2', 'El Batán':'#0891b2',
+      'Totoracocha':'#ea580c', 'Monay':'#65a30d', 'Hermano Miguel':'#be123c',
+      'Sucre':'#0d9488', 'Huayna Capac':'#9333ea', 'Huayna Cápac':'#9333ea', 'Cañaribamba':'#ca8a04',
+      'San Blas':'#4338ca', 'El Sagrario':'#c2410c', 'Gil Ramirez D.':'#15803d', 'Gil Ramírez D.':'#15803d',
+      'Baños':'#f43f5e', 'Cumbe':'#3b82f6', 'Chaucha':'#84cc16', 'Checa (Jidcay)':'#a855f7',
+      'Chiquintad':'#06b6d4', 'Llacao':'#f59e0b', 'Molleturo':'#10b981', 'Nulti':'#ec4899',
+      'Octavio Cordero Palacios':'#6366f1', 'Paccha':'#d97706', 'Quingeo':'#059669',
+      'Ricaurte':'#8b5cf6', 'San Joaquín':'#0284c7', 'Santa Ana':'#dc2626', 'Sayausí':'#65a30d',
+      'Sidcay':'#c026d3', 'Sinincay':'#0d9488', 'Tarqui':'#ea580c', 'Turi':'#4f46e5',
+      'Valle':'#16a34a', 'Victoria del Portete':'#be185d'
     };
     function colorParroquiaUrbana(nombre) {
-      return PARROQUIA_URBANA_COLORS[nombre] || 'rgba(156,163,175,0.5)';
+      return PARROQUIA_TODAS_COLORS[nombre] || 'rgba(156,163,175,0.5)';
     }
 
     /* Escala continua, normalizada al rango REAL observado (no 0-100 fijo),
@@ -573,14 +585,22 @@
       pct_65mas:   function(p){ return toNumber(p.sec_hom_65_mas) + toNumber(p.sec_muj_65_mas); }
     };
     var RANGO_PCT = {};
+    function percentil(arr, p) {
+      var s = arr.slice().sort(function(a,b){return a-b;});
+      var idx = (s.length - 1) * p;
+      var lo = Math.floor(idx), hi = Math.ceil(idx);
+      return lo === hi ? s[lo] : s[lo] + (s[hi] - s[lo]) * (idx - lo);
+    }
     (function calcularRangosPct() {
       Object.keys(CAMPOS_PCT).forEach(function (key) {
-        var min = Infinity, max = -Infinity;
+        var vals = [];
         (json_sec_a_simplificado_cuenca.features || []).forEach(function (f) {
           var v = pctSector(f.properties || {}, CAMPOS_PCT[key]);
-          if (v != null) { if (v < min) min = v; if (v > max) max = v; }
+          if (v != null) vals.push(v);
         });
-        RANGO_PCT[key] = { min: min, max: max };
+        /* Percentiles 5-95: evita que uno o dos sectores atípicos (muy pocos habitantes)
+           compriman visualmente a todos los demás cerca del centro de la escala. */
+        RANGO_PCT[key] = { min: percentil(vals, 0.05), max: percentil(vals, 0.95) };
       });
     })();
     var COLOR_PCT = {
@@ -597,11 +617,8 @@
         color: 'rgba(35,35,35,0.3)', weight: 0.5, fill: true, interactive: true
       };
       if (CAPA_TEMATICA === 'parroquia_urbana') {
-        var pu = p.sec_parroq_urbana;
-        return Object.assign({}, base, {
-          fillColor: pu ? colorParroquiaUrbana(pu) : 'rgba(209,213,219,0.5)',
-          fillOpacity: pu ? 0.55 : 0.15
-        });
+        var nombrePar = parroquiaMostrar(p);
+        return Object.assign({}, base, { fillColor: colorParroquiaUrbana(nombrePar), fillOpacity: 0.55 });
       }
       if (CAMPOS_PCT[CAPA_TEMATICA]) {
         var pct = pctSector(p, CAMPOS_PCT[CAPA_TEMATICA]);
@@ -789,7 +806,7 @@
         document.getElementById('inpNombrePunto').value = String(p.sec_estrato_sector || '') + ' · ' + fmtCoord(latlng.lat) + ', ' + fmtCoord(latlng.lng);
 
         if (layer.getPopup()) layer.setPopupContent(html);
-        else layer.bindPopup(html, { maxWidth: 340, maxHeight: 460, autoPan: true });
+        else layer.bindPopup(html, { maxWidth: 360, minWidth: 300, maxHeight: 520, autoPan: true, autoPanPadding: [20,20] });
         layer.openPopup(latlng);
       });
     }
@@ -848,6 +865,7 @@
         + '<div style="font-weight:900;font-size:15px;margin-bottom:2px">' + r.parroquia + '</div>'
         + '<div class="muted" style="margin-bottom:8px">Parroquia ' + r.tipo + ' · ' + fmtInt(r.electores) + ' electores</div>'
         + '<div style="font-size:12px;color:rgba(0,0,0,.62);margin-bottom:2px">Participación ' + fmtPct(r.participacion_pct) + ' · Ausentismo ' + fmtPct(r.ausentismo_pct) + '</div>'
+        + '<div style="font-size:12px;color:rgba(0,0,0,.62);margin-bottom:8px">Población: <b>' + fmtInt(r.pob_total) + '</b> habitantes · <b>' + fmtInt(r.hogares) + '</b> hogares</div>'
         + '<div style="font-weight:800;font-size:12px;margin-top:8px;color:#374151">1ª vuelta — ganador: ' + r.ganador_1v + '</div>'
         + '<table class="popTable">' + candidatos1v + '</table>'
         + '<div style="font-weight:800;font-size:12px;margin-top:8px;color:#374151">2ª vuelta — ganador: ' + r.ganador_2v + '</div>'
@@ -1118,7 +1136,7 @@
     }
     var LEYENDAS_TEMATICA = {
       estrato: 'Colores por estrato socioeconómico (ver tabla de abajo).',
-      parroquia_urbana: 'Cada color es una parroquia urbana de Cuenca. Gris = sector rural (sin parroquia urbana).',
+      parroquia_urbana: 'Cada color es una de las 36 parroquias del cantón (15 urbanas y 21 rurales).',
       pct_mujeres: 'Más intenso = mayor proporción de mujeres' + rangoTxt('pct_mujeres'),
       pct_votar: 'Más intenso = mayor proporción en edad de votar (16+)' + rangoTxt('pct_votar'),
       pct_16_29: 'Más intenso = mayor proporción de jóvenes 16-29 años' + rangoTxt('pct_16_29'),
